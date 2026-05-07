@@ -53,7 +53,7 @@ namespace ICU4N.Dev.Test.Rbbi
             internal String fName;                   // Name of the rule.
             internal String fRule;                   // Rule expression, excluding the name, as written in user source.
             internal String fExpandedRule;           // Rule expression after expanding the set definitions.
-            internal Regex fRuleMatcher;             // Regular expression that matches the rule.
+            internal CodePointRuleMatcher fRuleMatcher; // Codepoint-level matcher compiled from fExpandedRule.
         };
 
 
@@ -365,17 +365,17 @@ namespace ICU4N.Dev.Test.Rbbi
                     Console.Out.Write("fExpandedRule: {0}\n", thisRule.fExpandedRule);
                 }
 
-                // Compile a regular expression for this rule.
+                // Compile the rule into a codepoint-level matcher. The .NET Regex class does not
+                // support \U-escaped UTF-32 codepoints/ranges, which appear throughout the rule
+                // files; CodePointRuleMatcher walks codepoints directly and delegates character
+                // classes to UnicodeSet, which understands the ICU set/property syntax natively.
                 try
                 {
-                    // In .NET, only BMP characters are recognized. So, we convert all UTF32 code points ranges into
-                    // alternating UTF16 combination groups. We separated that functionality into a subclass of Regex
-                    // to avoid polluting this class with lots of extra regex fixup code.
-                    thisRule.fRuleMatcher = new Utf32Regex(@"\A(?:" + thisRule.fExpandedRule + ")", RegexOptions.Compiled);
+                    thisRule.fRuleMatcher = new CodePointRuleMatcher(thisRule.fExpandedRule);
                 }
-                catch (ArgumentException e)
+                catch (ArgumentException)
                 {
-                    Console.Error.Write("{0}: Error creating regular expression for rule {1}. Expansion is \n\"{2}\"",
+                    Console.Error.Write("{0}: Error compiling rule {1}. Expansion is \n\"{2}\"",
                             fMonkeyImpl.fRuleFileName, name, thisRule.fExpandedRule);
                     throw; // ICU4N: CA2200 Rethrow to preserve stack information
                 }
@@ -645,23 +645,19 @@ namespace ICU4N.Dev.Test.Rbbi
                     int ruleNum = 0;
                     int matchStart = 0;
                     int matchEnd = 0;
-                    Match match = null;
+                    int breakPos = -1;
                     for (ruleNum = 0; ruleNum < rules.fBreakRules.Count; ruleNum++)
                     {
                         BreakRule rule = rules.fBreakRules[ruleNum];
-                        //rule.fRuleMatcher.reset(fString.substring(strIdx));
-                        //if (rule.fRuleMatcher.lookingAt())
-                        //match = rule.fRuleMatcherLookingAt.Match(fString.Substring(strIdx));
-                        match = rule.fRuleMatcher.Match(fString.Substring(strIdx), 0);
-                        if (match.Success /*&& match.Index == 0*/) // LookingAt
+                        var match = rule.fRuleMatcher.LookingAt(fString, strIdx);
+                        if (match.Success)
                         {
                             // A candidate rule match, check further to see if we take it or continue to check other rules.
                             // Matches of zero or one code point count only if they also specify a break.
                             matchStart = strIdx;
-                            //matchEnd = strIdx + rule.fRuleMatcher.end();
-                            //hasBreak = BreakGroupStart(rule.fRuleMatcher) >= 0;
-                            matchEnd = strIdx + match.Index + match.Length;
-                            hasBreak = BreakGroupStart(match) >= 0;
+                            matchEnd = match.End;
+                            breakPos = match.BreakPos;
+                            hasBreak = breakPos >= 0;
                             if (hasBreak ||
                                     (matchStart < fString.Length && fString.OffsetByCodePoints(matchStart, 1) < matchEnd))
                             {
@@ -679,10 +675,9 @@ namespace ICU4N.Dev.Test.Rbbi
                         Dump(strIdx);
                         throw new ArgumentException(msg);
                     }
-                    //if (matchingRule.fRuleMatcher.group().Length == 0)
-                    if (matchingRule.fRuleMatcher.GetGroupNumbers().Length == 0)
+                    if (matchEnd == matchStart && !hasBreak)
                     {
-                        // Zero length rule match. This is also an error in the rule expressions.
+                        // Zero length rule match without a break marker. This is an error in the rule expressions.
                         String msg = String.Format("{0}:{1}: Zero length rule match at {2}.",
                                 rules.fMonkeyImpl.fRuleFileName, matchingRule.fName, strIdx);
                         Console.Error.WriteLine(msg);
@@ -703,12 +698,10 @@ namespace ICU4N.Dev.Test.Rbbi
                         }
                     }
 
-                    // Break positions appear in rules as a matching named capture of zero length at the break position,
-                    //   the adjusted pattern contains (?<BreakPosition>)
+                    // Break positions appear in rules as an empty group "()" at the break position,
+                    //   recorded by CodePointRuleMatcher in MatchResult.BreakPos.
                     if (hasBreak)
                     {
-                        //int breakPos = strIdx + BreakGroupStart(matchingRule.fRuleMatcher);
-                        int breakPos = strIdx + BreakGroupStart(match);
                         fExpectedBreaks[breakPos] = true;
                         // Console.Out.Write("recording break at {0}\n", breakPos);
                         // For the next iteration, pick up applying rules immediately after the break,
@@ -731,35 +724,6 @@ namespace ICU4N.Dev.Test.Rbbi
                         strIdx = updatedStrIdx;
                     }
                 }
-            }
-
-            // Helper function to find the starting index of a match of the "BreakPosition" named capture group.
-            // @param m: a Java regex Matcher that has completed a matching operation.
-            // @return m.start("BreakPosition),
-            //         or -1 if there is no such group, or the group did not participate in the match.
-            //
-            // TODO: this becomes m.start("BreakPosition") with Java 8.
-            //       In the mean time, assume that the only zero-length capturing group in
-            //       a reference rule expression is the "BreakPosition" that corresponds to a "÷".
-
-            internal static int BreakGroupStart(Match m)
-            {
-                for (int groupNum = 1; groupNum <= m.Groups.Count; ++groupNum)
-                {
-                    String group = m.Groups[groupNum].Value;
-                    //if (group == null)
-                    if (!m.Groups[groupNum].Success)
-                    {
-                        continue;
-                    }
-                    if (group.Equals(""))
-                    {
-                        // assert(m.end(groupNum) == m.end("BreakPosition"));
-                        //return m.start(groupNum);
-                        return m.Groups[groupNum].Index;
-                    }
-                }
-                return -1;
             }
 
             internal void Dump(int around)
