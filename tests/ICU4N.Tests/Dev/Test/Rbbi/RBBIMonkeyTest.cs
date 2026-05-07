@@ -328,11 +328,10 @@ namespace ICU4N.Dev.Test.Rbbi
                     throw new ArgumentException(msg);
                 }
 
-                // UAX break rule set definitions can be empty, just [].
-                // Regular expression set expressions don't accept this. Substitute with [a&&[^a]], which
-                // also matches nothing.
-
-                thisRule.fExpandedRule = thisRule.fExpandedRule.Replace("[]", "[a&&[^a]]");
+                // ICU4N: UAX break rule set definitions can be empty, just []. ICU4J had to
+                // substitute this with "[a&&[^a]]" because java.util.regex.Pattern doesn't accept
+                // an empty character class, but UnicodeSet (which compiles all character classes
+                // for CodePointRuleMatcher) handles "[]" natively, so no substitution is needed.
 
                 // Change Unicode escape syntax for compatibility with Java regular expressions (Java 7 or newer)
                 //    \udddd     => \x{dddd}
@@ -365,9 +364,10 @@ namespace ICU4N.Dev.Test.Rbbi
                     Console.Out.Write("fExpandedRule: {0}\n", thisRule.fExpandedRule);
                 }
 
-                // Compile the rule into a codepoint-level matcher. The .NET Regex class does not
-                // support \U-escaped UTF-32 codepoints/ranges, which appear throughout the rule
-                // files; CodePointRuleMatcher walks codepoints directly and delegates character
+                // ICU4N: ICU4J compiles fExpandedRule with java.util.regex.Pattern using
+                // Pattern.COMMENTS | Pattern.DOTALL, but .NET's System.Text.RegularExpressions.Regex
+                // does not support the \U-escaped UTF-32 codepoints/ranges that pervade the rule
+                // files. CodePointRuleMatcher walks codepoints directly and delegates character
                 // classes to UnicodeSet, which understands the ICU set/property syntax natively.
                 try
                 {

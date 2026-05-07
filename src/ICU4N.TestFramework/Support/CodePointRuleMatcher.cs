@@ -4,32 +4,43 @@ using J2N.Text;
 using System;
 using System.Collections.Generic;
 
-namespace ICU4N.Dev.Test.Rbbi
+// ICU4N specific - has no upstream equivalent. ICU4J uses java.util.regex.Pattern
+// directly with Pattern.COMMENTS | Pattern.DOTALL; that works because Java's regex
+// natively understands \U-style codepoint escapes and ranges across the BMP/astral
+// boundary. .NET's System.Text.RegularExpressions.Regex does not, so we do the
+// matching ourselves at the codepoint level and delegate character classes to
+// UnicodeSet (which understands the ICU set/property syntax including \U escapes).
+
+namespace ICU4N.Support
 {
-    // A small codepoint-level matcher for the rule grammar used by RBBIMonkeyTest.
-    //
-    // Why this exists: the rule files (break_rules/*.txt) embed UTF-32 codepoint
-    // ranges like \U00010000-\U0001FFFF in character classes. .NET's
-    // System.Text.RegularExpressions.Regex does not understand that escape syntax,
-    // and the prior Utf32Regex shim that rewrites them as UTF-16 surrogate-pair
-    // alternations did not work for the full corpus, so the test never matched
-    // anything and was disabled.
-    //
-    // The grammar after BreakRules.AddRule expansion is small and regular:
-    //   atom      := '.' | charClass | group
-    //   charClass := '[' ... ']'           (parsed by UnicodeSet, which handles \U escapes natively)
-    //   group     := '(' alternation ')'   (an empty group "()" is the break marker)
-    //   factor    := atom ('*' | '?')?
-    //   sequence  := factor*
-    //   alternation := sequence ('|' sequence)*
-    // Whitespace between tokens is concatenation. '\#' is a literal '#'.
-    // The full rule is implicitly anchored at the current position (looking-at).
-    //
-    // The matcher operates on codepoints, which is what the rules are written in
-    // terms of, sidestepping all UTF-16 surrogate handling.
-    internal sealed class CodePointRuleMatcher
+    /// <summary>
+    /// A small codepoint-level matcher for the regex-like rule grammar used by tests
+    /// such as RBBIMonkeyTest, where rule files embed UTF-32 codepoint escapes/ranges
+    /// (e.g. <c>\U00010000-\U0001FFFF</c>) that .NET's
+    /// <see cref="System.Text.RegularExpressions.Regex"/> cannot interpret.
+    /// </summary>
+    /// <remarks>
+    /// Supported grammar (closely matching the subset of Java <c>Pattern</c> used by
+    /// ICU break-rule files when compiled with <c>Pattern.COMMENTS | Pattern.DOTALL</c>):
+    /// <code>
+    ///   alternation := sequence ('|' sequence)*
+    ///   sequence    := factor*
+    ///   factor      := atom ('*' | '?')?
+    ///   atom        := '.' | charClass | group | escapedLiteral
+    ///   charClass   := '[' ... ']'             (parsed by UnicodeSet)
+    ///   group       := '(' alternation ')'
+    ///                | '(?:' alternation ')'   (non-capturing)
+    ///                | '(?=' alternation ')'   (positive lookahead)
+    ///                | '(?!' alternation ')'   (negative lookahead)
+    ///                | '()'                    (the zero-width break-marker)
+    /// </code>
+    /// Whitespace between tokens is treated as concatenation. <c>.</c> matches any
+    /// single codepoint, including line terminators. The pattern is implicitly
+    /// anchored at the start position when invoked via <see cref="LookingAt"/>.
+    /// </remarks>
+    public sealed class CodePointRuleMatcher
     {
-        internal sealed class MatchResult
+        public sealed class MatchResult
         {
             public bool Success;
             public int End;       // exclusive end index in the input string (UTF-16 units).
@@ -54,7 +65,7 @@ namespace ICU4N.Dev.Test.Rbbi
             public override IEnumerable<int> Match(string input, int pos, MatchState state)
             {
                 if (pos >= input.Length) yield break;
-                yield return pos + Character.CharCount(input.CodePointAt(pos));
+                yield return pos + J2N.Character.CharCount(input.CodePointAt(pos));
             }
         }
 
@@ -67,7 +78,7 @@ namespace ICU4N.Dev.Test.Rbbi
                 if (pos >= input.Length) yield break;
                 int cp = input.CodePointAt(pos);
                 if (_set.Contains(cp))
-                    yield return pos + Character.CharCount(cp);
+                    yield return pos + J2N.Character.CharCount(cp);
             }
         }
 
@@ -405,7 +416,7 @@ namespace ICU4N.Dev.Test.Rbbi
                     throw new ArgumentException("Trailing backslash at position " + _pos);
                 _pos++; // skip backslash
                 int cp = _src.CodePointAt(_pos);
-                _pos += Character.CharCount(cp);
+                _pos += J2N.Character.CharCount(cp);
                 var set = new UnicodeSet();
                 set.Add(cp);
                 return new CharClassNode(set);
