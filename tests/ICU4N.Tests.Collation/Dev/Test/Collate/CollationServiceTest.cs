@@ -8,7 +8,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Resources;
-using System.Runtime.InteropServices;
 
 namespace ICU4N.Dev.Test.Collate
 {
@@ -237,14 +236,12 @@ namespace ICU4N.Dev.Test.Collate
         }
 
         [Test]
+        // Pin UI culture: the factory's display-name table is keyed on en_US, and the
+        // single-arg Collator.GetDisplayName resolves the display locale from CurrentUICulture.
+        // Without this, the test fails on hosts whose default locale isn't en_US (e.g., Linux containers with POSIX/C). See #37.
+        [SetUICulture("en-US")]
         public void TestRegisterFactory()
         {
-
-#if NET5_0_OR_GREATER || NETCOREAPP1_0_OR_GREATER
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-                Assert.Ignore("ICU4N TODO: Fails on Ubuntu 18.04 and Ubuntu 20.04 on .NET 5 and higher. See: https://github.com/NightOwl888/ICU4N/issues/37");
-#endif
-
             UCultureInfo fu_FU = new UCultureInfo("fu_FU");
             UCultureInfo fu_FU_FOO = new UCultureInfo("fu_FU_FOO");
 
