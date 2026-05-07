@@ -1176,11 +1176,8 @@ namespace ICU4N.Dev.Test.Rbbi
         //      -ea -Drules=line.txt -Dloop=-1
         //
         [Test]
-        [Ignore("ICU4N TODO: Fix this")]
         public void TestMonkey()
         {
-            fail("TODO: Rule regex never matches the test data, so we never actually test anything (even though it passes).");
-
             String[] tests = {"grapheme.txt", "word.txt", "line.txt", "sentence.txt", "line_normal.txt",
                     "line_normal_cj.txt", "line_loose.txt", "line_loose_cj.txt", "word_POSIX.txt"
             };
