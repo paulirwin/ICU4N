@@ -1001,10 +1001,13 @@ namespace ICU4N.Dev.Test.Format
         }
 
         [Test]
+        // Pin UI culture: GetRuleSetDisplayName(name) (single-arg) resolves the display
+        // locale from CurrentUICulture, and only the en_US localization (e.g. "Simplified")
+        // matches the assertion — on hosts with a non-en_US default the rule set's raw
+        // lowercase name (e.g. "simplified") is returned. See #37.
+        [SetUICulture("en-US")]
         public void TestRuleSetDisplayName()
         {
-            Assume.That(!PlatformDetection.IsLinux, "LUCENENET TODO: On Linux, this test is failing for some unkown reason. Most likely, it is because the localizations array is not being processed correctly.");
-
             /*
              * Spellout rules for U.K. English.
              * This was borrowed from the rule sets for TestRuleSetDisplayName()

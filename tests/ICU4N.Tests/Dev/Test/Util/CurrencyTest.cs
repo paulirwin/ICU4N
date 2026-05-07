@@ -223,10 +223,12 @@ namespace ICU4N.Dev.Test.Util
         }
 
         [Test]
+        // Pin UI culture: Currency.GetSymbol() (no args) uses CurrentUICulture, and the
+        // USD symbol is "$" only under en_US — under the root locale it's "US$", which
+        // is what hosts with a non-en_US default (e.g., Linux containers with POSIX/C) see. See #37.
+        [SetUICulture("en-US")]
         public void TestCoverage()
         {
-            Assume.That(!PlatformDetection.IsLinux, "LUCENENET TODO: On Linux, this test is failing for some unkown reason.");
-
             Currency usd = Currency.GetInstance("USD");
             assertEquals($"USD.GetSymbol() in {UCultureInfo.CurrentUICulture.FullName}",
                     "$",
