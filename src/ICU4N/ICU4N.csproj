@@ -78,21 +78,7 @@
     <!-- NOTE: This is a transitive dependency, but it the version that is being resolved is vulnerable, so we are upgrading it here for the end users. -->
     <PackageReference Include="System.Text.RegularExpressions" Version="$(SystemTextRegularExpressionsPackageReferenceVersion)" />
 
-    <!-- On net451, we incorrectly get references to System.Memory. We can exclude the DLL and dependencies as follows.
-        The IDE view is wrong, these references don't actually exist.
-        ExcludeAssets=compile removes the dependency from being referenced. ExcludeAssets=runtime removes the dependency from the build output. -->
-    <PackageReference Include="System.Buffers" Version="$(SystemBuffersPackageReferenceVersion)">
-      <ExcludeAssets>compile;runtime</ExcludeAssets>
-    </PackageReference>
-    <PackageReference Include="System.Memory" Version="$(SystemMemoryPackageReferenceVersion)">
-      <ExcludeAssets>compile;runtime</ExcludeAssets>
-    </PackageReference>
-    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="$(SystemRuntimeCompilerServicesUnsafePackageReferenceVersion)">
-      <ExcludeAssets>compile;runtime</ExcludeAssets>
-    </PackageReference>
-    <PackageReference Include="NetFx.System.Buffers" Version="$(NetFxSystemBuffersPackageReferenceVersion)" />
-    <PackageReference Include="NetFx.System.Memory" Version="$(NetFxSystemMemoryPackageReferenceVersion)" />
-    <PackageReference Include="NetFx.System.Runtime.CompilerServices.Unsafe" Version="$(NetFxSystemRuntimeCompilerServicesUnsafePackageReferenceVersion)" />
+    <PackageReference Include="System.Memory" Version="$(SystemMemoryPackageReferenceVersion)" />
   </ItemGroup>
 
   <ItemGroup Condition=" '$(TargetFramework)' == 'net40' ">
