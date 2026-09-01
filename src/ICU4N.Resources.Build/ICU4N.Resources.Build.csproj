@@ -74,13 +74,21 @@
     <ICU4JResponseFileDirectory>$(ICU4JWorkingDirectory)/icu4j-embed</ICU4JResponseFileDirectory>
   </PropertyGroup>
 
+  <!-- The pack steps run without /p:AssemblyVersion= and only need to package the
+       satellites an earlier build already produced, so generation is skipped when
+       no version is available but the neutral satellite is present. -->
+  <PropertyGroup>
+    <_SatellitesAlreadyBuilt Condition=" '$(AssemblyVersion)' == '' And Exists('$(ICU4NSatelliteAssemblyOutputDir)/$(ICU4NMainAssemblyName).resources.dll') ">true</_SatellitesAlreadyBuilt>
+    <_SatelliteOrchestrationDependsOn Condition=" '$(_SatellitesAlreadyBuilt)' != 'true' ">GenerateOurSatelliteAssemblies</_SatelliteOrchestrationDependsOn>
+  </PropertyGroup>
+
   <!-- Generates the satellites, then registers them as None items so they flow to
        referencing projects' output. Globbed inside a target because the files do
        not exist at evaluation time on a clean build; None with an explicit
        TargetPath keeps the SDK from re-routing *.resources.dll through RAR. -->
   <Target Name="_RunSatelliteOrchestration"
           BeforeTargets="AssignTargetPaths"
-          DependsOnTargets="GenerateOurSatelliteAssemblies">
+          DependsOnTargets="$(_SatelliteOrchestrationDependsOn)">
     <ItemGroup>
       <_GeneratedSatellite Include="$(ICU4NSatelliteAssemblyOutputDir)/**/*.resources.dll" />
       <None Include="@(_GeneratedSatellite)">
