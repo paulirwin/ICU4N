@@ -13,6 +13,15 @@
     <IsPackable>false</IsPackable>
     <IsPublishable>false</IsPublishable>
 
+    <!-- The solution builds this project directly and four others reference it,
+         so instances can run concurrently. It ships nothing, so suppress the
+         reference assembly, deps file and symbols that those instances would
+         otherwise race to write to the same paths. -->
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
     <!-- The satellites are for ICU4N.dll — use its name for the resource DLLs. -->
     <ICU4NMainAssemblyName>ICU4N</ICU4NMainAssemblyName>
 
@@ -109,17 +118,6 @@
 
   <Target Name="ExecICU4JResourceConverter" BeforeTargets="GenerateOurSatelliteAssemblies">
 
-    <CheckWhetherResourcesRequireUpdate SourceFilePath="$(ICU4JJarFilePath)" DestinationPath="$(ICU4JResourcesDirectory)">
-      <Output PropertyName="ResourcesRequireUpdate" TaskParameter="RequiresUpdate" />
-    </CheckWhetherResourcesRequireUpdate>
-
-    <Message Text="ResourcesRequireUpdate: $(ResourcesRequireUpdate)" Importance="high" />
-
-    <Message Text="Converting ICU4J Resource Files..." Importance="high" Condition=" '$(ResourcesRequireUpdate.ToLowerInvariant())' == 'true' " />
-
-    <RemoveDir Directories="$(ICU4JWorkingDirectory)" Condition=" '$(ResourcesRequireUpdate.ToLowerInvariant())' == 'true' " />
-    <RemoveDir Directories="$(ICU4JResourcesDirectory)" Condition=" '$(ResourcesRequireUpdate.ToLowerInvariant())' == 'true' " />
-
     <PropertyGroup>
       <RunICU4JResourceConverterCommand Condition="$([MSBuild]::IsOSPlatform('Windows')) == 'true'">"$(ICU4JResourceConverterOutputDir)/ICU4JResourceConverter.exe"</RunICU4JResourceConverterCommand>
       <RunICU4JResourceConverterCommand Condition="$([MSBuild]::IsOSPlatform('Windows')) == 'false'">"$(ICU4JResourceConverterOutputDir)/ICU4JResourceConverter"</RunICU4JResourceConverterCommand>
@@ -128,7 +126,13 @@
       <RunICU4JResourceConverterCommand>$(RunICU4JResourceConverterCommand) -out "$(ICU4JResourcesDirectory)"</RunICU4JResourceConverterCommand>
     </PropertyGroup>
 
-    <Exec Command="$(RunICU4JResourceConverterCommand)" Condition=" '$(ResourcesRequireUpdate.ToLowerInvariant())' == 'true' " />
+    <CheckWhetherResourcesRequireUpdate SourceFilePath="$(ICU4JJarFilePath)"
+                                        WorkingDirectory="$(ICU4JWorkingDirectory)"
+                                        DestinationPath="$(ICU4JResourcesDirectory)">
+      <Output PropertyName="ResourcesRequireUpdate" TaskParameter="RequiresUpdate" />
+    </CheckWhetherResourcesRequireUpdate>
+
+    <Exec Command="$(RunICU4JResourceConverterCommand)" Condition=" '$(ResourcesRequireUpdate)' == 'true' " />
   </Target>
 
   <Target Name="_CollectSatelliteInputs">
@@ -223,6 +227,9 @@
           Inputs="$(MSBuildAllProjects);@(_NeutralSatelliteResource)"
           Outputs="$(ICU4JResponseFileDirectory)/neutral.AssemblyInfo.cs;$(ICU4NSatelliteAssemblyOutputDir)/$(ICU4NMainAssemblyName).resources.dll">
 
+    <Error Condition=" '$(AssemblyVersion)' == '' "
+           Text="AssemblyVersion is empty. Satellite generation needs it from Nerdbank.GitVersioning (GetBuildVersion) or from /p:AssemblyVersion= on the command line." />
+
     <ItemGroup>
       <_NeutralSatelliteAttribute Include="@(_SatelliteCommonAttribute)" />
       <_NeutralSatelliteAttribute Include="System.Reflection.AssemblyVersionAttribute">
@@ -261,6 +268,9 @@
       <_OutputAssembly>$(ICU4NSatelliteAssemblyOutputDir)/$(_SatelliteCulture)/$(ICU4NMainAssemblyName).resources.dll</_OutputAssembly>
       <_AssemblyInfoFile>$(ICU4JResponseFileDirectory)/$(_SatelliteCulture).AssemblyInfo.cs</_AssemblyInfoFile>
     </PropertyGroup>
+
+    <Error Condition=" '$(_SatelliteAssemblyVersion)' == '' "
+           Text="AssemblyVersion is empty. Satellite generation needs it from Nerdbank.GitVersioning (GetBuildVersion) or from /p:AssemblyVersion= on the command line." />
 
     <ItemGroup>
       <_OneCultureAttribute Include="@(_SatelliteCommonAttribute)" />
@@ -367,46 +377,87 @@
     </Task>
   </UsingTask>
 
+  <!--
+    Reports whether the ICU4J resources need converting, and clears the working
+    directory when they do.
+
+    The solution builds this project both directly and through
+    ProjectReference, so two instances can run concurrently. The check and the
+    directory wipe are serialized on a system-wide mutex, so only the first
+    instance is told to convert; by the time the second one checks, the
+    resources are present and it does nothing.
+  -->
   <UsingTask TaskName="CheckWhetherResourcesRequireUpdate" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildBinPath)\Microsoft.Build.Tasks.Core.dll">
     <ParameterGroup>
       <SourceFilePath ParameterType="System.String" Required="true" />
+      <WorkingDirectory ParameterType="System.String" Required="true" />
       <DestinationPath ParameterType="System.String" Required="true" />
       <RequiresUpdate ParameterType="System.Boolean" Output="true" />
     </ParameterGroup>
     <Task>
       <Using Namespace="System" />
       <Using Namespace="System.IO" />
+      <Using Namespace="System.Security.Cryptography" />
       <Using Namespace="System.Text" />
+      <Using Namespace="System.Threading" />
       <Code Type="Fragment" Language="cs">
         <![CDATA[
-            RequiresUpdate = false;
-            if (Directory.Exists(DestinationPath))
-            {
-                string[] files = Directory.GetFiles(DestinationPath, "*.*", SearchOption.AllDirectories);
-                if (File.Exists(SourceFilePath) && files.Length > 0)
-                {
-                    DateTime latestSourceWrite = File.GetLastWriteTimeUtc(SourceFilePath);
+        // Name the mutex after the working directory so builds of different
+        // working trees do not block each other.
+        string key;
+        using (var sha = SHA256.Create())
+            key = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(WorkingDirectory))).Replace("-", "").Substring(0, 32);
 
-                    foreach (var file in files)
-                    {
-                        if (latestSourceWrite > File.GetLastWriteTimeUtc(file))
-                        {
-                            RequiresUpdate = true;
-                            break;
-                        }
-                    }
-                }
-                else
-                {
-                    RequiresUpdate = true;
-                }
+        RequiresUpdate = false;
+        bool held = false;
+        var mutex = new Mutex(false, "Global\\ICU4N-ConvertResources-" + key);
+        try
+        {
+            try { held = mutex.WaitOne(TimeSpan.FromMinutes(10)); }
+            catch (AbandonedMutexException) { held = true; }
+
+            if (!held)
+            {
+                Log.LogError("Timed out waiting for another build to finish converting the ICU4J resources.");
             }
             else
             {
-                RequiresUpdate = true;
+                if (!Directory.Exists(DestinationPath))
+                {
+                    RequiresUpdate = true;
+                }
+                else
+                {
+                    var files = Directory.GetFiles(DestinationPath, "*.*", SearchOption.AllDirectories);
+                    if (!File.Exists(SourceFilePath) || files.Length == 0)
+                    {
+                        RequiresUpdate = true;
+                    }
+                    else
+                    {
+                        var latestSourceWrite = File.GetLastWriteTimeUtc(SourceFilePath);
+                        foreach (var file in files)
+                        {
+                            if (latestSourceWrite > File.GetLastWriteTimeUtc(file))
+                            {
+                                RequiresUpdate = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (RequiresUpdate && Directory.Exists(WorkingDirectory))
+                    Directory.Delete(WorkingDirectory, true);
             }
-          ]]>
-        </Code>
+        }
+        finally
+        {
+            if (held) mutex.ReleaseMutex();
+            mutex.Dispose();
+        }
+        ]]>
+      </Code>
     </Task>
   </UsingTask>
 
