@@ -1,24 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!--
-    Orchestration project: generates ICU4N satellite assemblies into
-    $(ICU4NSatelliteAssemblyOutputDir). Has no compile sources and produces
-    no shipping assembly. Referenced build-only by:
-      - ICU4N (via <ProjectReference ReferenceOutputAssembly="false"/>) so
-        satellites propagate into consumer bin for local dev/test
-      - ICU4N.Resources / ICU4N.Resources.NETFramework4.0 to guarantee
-        satellites exist before those projects pack
-      - Test projects, via tests/Directory.Build.targets injection
-
-    Satellites flow to consumers through the <Content> items below: the SDK
-    translates them into ReferenceCopyLocalPaths for referencing projects,
-    preserving the {culture}/ subdirectory structure.
-
-    Note: the actual .resources.dll files are produced into an external
-    artifacts directory rather than this project's own bin/, so the SDK's
-    automatic satellite probe on project references does not pick them up
-    (it only scans the referenced project's OutputPath).
-  -->
+  <!-- Generates the ICU4N satellite assemblies into $(ICU4NSatelliteAssemblyOutputDir).
+       Produces no shipping assembly; referenced build-only by ICU4N, the two
+       ICU4N.Resources package projects, and the test projects. -->
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
@@ -32,25 +16,46 @@
     <!-- The satellites are for ICU4N.dll — use its name for the resource DLLs. -->
     <ICU4NMainAssemblyName>ICU4N</ICU4NMainAssemblyName>
 
-    <!-- No main assembly to worry about; still set CLSCompliant=false to avoid the
-         Directory.Build.targets rule injecting an AssemblyAttribute. -->
+    <!-- Avoids the Directory.Build.targets rule injecting a CLSCompliant attribute. -->
     <CLSCompliant>false</CLSCompliant>
 
-    <!-- No main assembly is produced, so we don't need SourceLink / signing
-         machinery, but they're harmless here. -->
   </PropertyGroup>
 
-  <!-- Empty Compile item group: exclude the default C# glob so MSBuild does
-       not complain about "no source files" and we don't accidentally pick
-       anything up. -->
+  <!-- Satellites carry ICU4N's identity, not this project's. Description mirrors
+       the one in ICU4N.csproj. -->
+  <PropertyGroup Label="Satellite Assembly Identity">
+    <ICU4NSatelliteTitle>ICU4N</ICU4NSatelliteTitle>
+    <ICU4NSatelliteProduct>ICU4N</ICU4NSatelliteProduct>
+    <ICU4NSatelliteDescription>ICU (International Components for Unicode) is a set of libraries providing Unicode and Globalization support for software applications. It provides Text-boundary analysis (RuleBasedBreakIterator) as well as easy access to all of the many Unicode character properties, Unicode Normalization, Case Folding and other fundamental operations as specified by the Unicode Standard. ICU4N is a .NET port of ICU4J.</ICU4NSatelliteDescription>
+  </PropertyGroup>
+
+  <!-- The same satellites are packed into both ICU4N.Resources (lib/netstandard2.0)
+       and ICU4N.Resources.NETFramework4.0 (lib/net40), so they are built once
+       against net40: .NET Core can load a net40 resource assembly, but net40
+       cannot load a netstandard2.0 one. These reference assemblies are
+       platform-neutral, so no Windows SDK or Mono is required. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net40"
+                      Version="$(MicrosoftNETFrameworkReferenceAssembliesPackageReferenceVersion)"
+                      PrivateAssets="All"
+                      ExcludeAssets="all"
+                      GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <ICU4NSatelliteReferenceAssemblyDir>$(PkgMicrosoft_NETFramework_ReferenceAssemblies_net40)/build/.NETFramework/v4.0</ICU4NSatelliteReferenceAssemblyDir>
+  </PropertyGroup>
+
+  <!-- No sources: exclude the default C# glob. -->
   <ItemGroup>
     <Compile Remove="**/*.cs" />
   </ItemGroup>
 
   <PropertyGroup>
     <ICU4JResourceConverterDir>$(SolutionDir)src/tools/ICU4JResourceConverter</ICU4JResourceConverterDir>
-    <ICU4JResourceConverterTargetFramework>net5.0</ICU4JResourceConverterTargetFramework>
-    <ICU4JResourceConverterTargetFramework Condition="'$(VisualStudioVersion)' &gt;= '16.10'">net9.0</ICU4JResourceConverterTargetFramework>
+    <!-- Read the TFM from the converter project so this stays correct wherever
+         the build runs. -->
+    <ICU4JResourceConverterTargetFramework Condition="'$(ICU4JResourceConverterTargetFramework)' == ''">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(ICU4JResourceConverterDir)/ICU4JResourceConverter.csproj')), '&lt;TargetFramework&gt;([^&lt;]+)&lt;/TargetFramework&gt;').Groups[1].Value)</ICU4JResourceConverterTargetFramework>
     <ICU4JResourceConverterOutputDir>$(ICU4JResourceConverterDir)/bin/$(Configuration)/$(ICU4JResourceConverterTargetFramework)</ICU4JResourceConverterOutputDir>
 
     <ICU4JDownloadConfigFilePath>$(SolutionDir).build/icu4j-download-urls.txt</ICU4JDownloadConfigFilePath>
@@ -60,28 +65,10 @@
     <ICU4JResponseFileDirectory>$(ICU4JWorkingDirectory)/icu4j-embed</ICU4JResponseFileDirectory>
   </PropertyGroup>
 
-  <!--
-    Expose the generated satellites as Content so they propagate through
-    <ProjectReference> into referencing projects' output directories. Using
-    Link with RecursiveDir preserves the {culture}/ subfolder layout the CLR
-    satellite resolver expects.
-
-    This is populated inside a target (not a top-level <ItemGroup>) because
-    the files do not exist at project-evaluation time on a clean build — the
-    glob would capture nothing. By running inside GenerateOurSatelliteAssemblies
-    (which creates the files) and before AssignTargetPaths / collection of
-    copy-to-output items, the item list is correct when consumers read it.
-  -->
-
-  <!-- Orchestration entry point: runs satellite generation, then registers
-       the outputs as None items with explicit TargetPath so copy-to-output and
-       transitive copy-to-output flow works regardless of culture-subdir naming.
-
-       Using None (not Content) and setting TargetPath explicitly avoids the
-       SDK satellite-detection heuristics that would otherwise re-route
-       *.resources.dll files through the RAR/satellite path. Copy items are
-       propagated to referencing projects by the SDK's
-       _GetCopyToOutputDirectoryItemsFromTransitiveProjectReferences target. -->
+  <!-- Generates the satellites, then registers them as None items so they flow to
+       referencing projects' output. Globbed inside a target because the files do
+       not exist at evaluation time on a clean build; None with an explicit
+       TargetPath keeps the SDK from re-routing *.resources.dll through RAR. -->
   <Target Name="_RunSatelliteOrchestration"
           BeforeTargets="AssignTargetPaths"
           DependsOnTargets="GenerateOurSatelliteAssemblies">
@@ -97,11 +84,6 @@
     </ItemGroup>
   </Target>
 
-  <!-- ============================================================
-       Satellite generation pipeline (moved verbatim from ICU4N.csproj)
-       ============================================================ -->
-
-  <!-- ICU4N NOTE: To debug on Linux/macOS, the contents of the _artifacts/SatelliteAssemblies and the file _artifactsDirectory/fullLocaleNames.lst must be copied to the local _artifacts folder. These currently won't build on non-Windows platforms. -->
   <Target Name="DownloadICU4J" BeforeTargets="ExecICU4JResourceConverter" Returns="$(ICU4JJarFilePath)">
 
     <PropertyGroup>
@@ -149,13 +131,16 @@
     <Exec Command="$(RunICU4JResourceConverterCommand)" Condition=" '$(ResourcesRequireUpdate.ToLowerInvariant())' == 'true' " />
   </Target>
 
-  <Target Name="_CollectSatelliteInputs"
-          DependsOnTargets="ResolveAssemblyReferences">
+  <Target Name="_CollectSatelliteInputs">
+    <Error Condition="!Exists('$(ICU4NSatelliteReferenceAssemblyDir)/mscorlib.dll')"
+           Text="The .NET Framework 4.0 reference assemblies were not found at '$(ICU4NSatelliteReferenceAssemblyDir)'. Run a NuGet restore for $(MSBuildProjectName) so the Microsoft.NETFramework.ReferenceAssemblies.net40 package is available." />
+
     <ItemGroup>
       <_NeutralSatelliteResource Include="$(ICU4JResourcesDirectory)/*.*" />
 
-      <_SatelliteAssemblyReferences Include="@(ReferencePath)"
-        Condition=" '%(Filename)' == 'mscorlib' or '%(Filename)' == 'netstandard' or '%(Filename)' == 'System.Runtime' " />
+      <!-- net40 mscorlib, paired with NoStandardLib on the Csc calls below to
+           suppress the implicit netstandard reference. -->
+      <_SatelliteAssemblyReferences Include="$(ICU4NSatelliteReferenceAssemblyDir)/mscorlib.dll" />
 
       <_OneCultureResource Condition=" '$(_SatelliteCulture)' != '' "
                            Include="$(ICU4JResourcesDirectory)/$(_SatelliteCulture)/*.*" />
@@ -163,6 +148,40 @@
 
     <MakeDir Directories="$(ICU4NSatelliteAssemblyOutputDir)" Condition="!Exists('$(ICU4NSatelliteAssemblyOutputDir)')" />
     <MakeDir Directories="$(ICU4JResponseFileDirectory)" Condition="!Exists('$(ICU4JResponseFileDirectory)')" />
+  </Target>
+
+  <!-- Attributes shared by the neutral and localized satellites. Per-culture
+       builds are nested MSBuild invocations that never run GetBuildVersion, so
+       the versions are passed in from the parent. -->
+  <Target Name="_CollectSatelliteAssemblyAttributes">
+    <PropertyGroup>
+      <_SatelliteFileVersion Condition=" '$(_SatelliteFileVersion)' == '' ">$(FileVersion)</_SatelliteFileVersion>
+      <_SatelliteInformationalVersion Condition=" '$(_SatelliteInformationalVersion)' == '' ">$(AssemblyInformationalVersion)</_SatelliteInformationalVersion>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_SatelliteCommonAttribute Include="System.Reflection.AssemblyTitleAttribute">
+        <_Parameter1>$(ICU4NSatelliteTitle)</_Parameter1>
+      </_SatelliteCommonAttribute>
+      <_SatelliteCommonAttribute Include="System.Reflection.AssemblyDescriptionAttribute">
+        <_Parameter1>$(ICU4NSatelliteDescription)</_Parameter1>
+      </_SatelliteCommonAttribute>
+      <_SatelliteCommonAttribute Include="System.Reflection.AssemblyCompanyAttribute">
+        <_Parameter1>$(Company)</_Parameter1>
+      </_SatelliteCommonAttribute>
+      <_SatelliteCommonAttribute Include="System.Reflection.AssemblyProductAttribute">
+        <_Parameter1>$(ICU4NSatelliteProduct)</_Parameter1>
+      </_SatelliteCommonAttribute>
+      <_SatelliteCommonAttribute Include="System.Reflection.AssemblyInformationalVersionAttribute">
+        <_Parameter1>$(_SatelliteInformationalVersion)</_Parameter1>
+      </_SatelliteCommonAttribute>
+      <_SatelliteCommonAttribute Include="System.Reflection.AssemblyCopyrightAttribute">
+        <_Parameter1>$(Copyright)</_Parameter1>
+      </_SatelliteCommonAttribute>
+      <_SatelliteCommonAttribute Include="System.Reflection.AssemblyFileVersionAttribute">
+        <_Parameter1>$(_SatelliteFileVersion)</_Parameter1>
+      </_SatelliteCommonAttribute>
+    </ItemGroup>
   </Target>
 
   <!-- Ensure $(AssemblyVersion) is populated by Nerdbank.GitVersioning before
@@ -187,24 +206,31 @@
       </_SatelliteRecursionInput>
     </ItemGroup>
 
+    <!-- Announce up front so a long run does not look like a hang. -->
+    <Message Text="Generating @(_SatelliteRecursionInput->Count()) ICU4N satellite assemblies (up-to-date ones are skipped)..."
+             Importance="high" />
+
     <MSBuild Projects="@(_SatelliteRecursionInput->'%(ProjectPath)')"
              Targets="_BuildOneSatelliteAssembly"
-             Properties="_SatelliteCulture=%(_SatelliteRecursionInput.Identity);TargetFramework=$(TargetFramework);_SatelliteAssemblyVersion=$(AssemblyVersion)"
+             Properties="_SatelliteCulture=%(_SatelliteRecursionInput.Identity);TargetFramework=$(TargetFramework);_SatelliteAssemblyVersion=$(AssemblyVersion);_SatelliteFileVersion=$(FileVersion);_SatelliteInformationalVersion=$(AssemblyInformationalVersion)"
              BuildInParallel="true" />
+
+    <Message Text="ICU4N satellite assemblies are up to date." Importance="high" />
   </Target>
 
   <Target Name="_BuildNeutralSatelliteAssembly"
-          DependsOnTargets="_CollectSatelliteInputs"
+          DependsOnTargets="_CollectSatelliteInputs;_CollectSatelliteAssemblyAttributes"
           Inputs="$(MSBuildAllProjects);@(_NeutralSatelliteResource)"
           Outputs="$(ICU4JResponseFileDirectory)/neutral.AssemblyInfo.cs;$(ICU4NSatelliteAssemblyOutputDir)/$(ICU4NMainAssemblyName).resources.dll">
 
     <ItemGroup>
+      <_NeutralSatelliteAttribute Include="@(_SatelliteCommonAttribute)" />
       <_NeutralSatelliteAttribute Include="System.Reflection.AssemblyVersionAttribute">
         <_Parameter1>$(AssemblyVersion)</_Parameter1>
       </_NeutralSatelliteAttribute>
     </ItemGroup>
 
-    <Message Text="Generating neutral satellite assembly ($(ICU4NMainAssemblyName).resources.dll)..." Importance="high" />
+    <Message Text="Generating satellite assembly for neutral culture..." Importance="high" />
 
     <WriteCodeFragment AssemblyAttributes="@(_NeutralSatelliteAttribute)"
                        Language="C#"
@@ -217,13 +243,16 @@
          KeyFile="$(AssemblyOriginatorKeyFile)"
          NoConfig="true"
          NoLogo="true"
+         NoStandardLib="true"
          Deterministic="true"
+         Optimize="true"
+         DebugType="none"
          TargetType="Library"
          UseSharedCompilation="true" />
   </Target>
 
   <Target Name="_BuildOneSatelliteAssembly"
-          DependsOnTargets="_CollectSatelliteInputs"
+          DependsOnTargets="_CollectSatelliteInputs;_CollectSatelliteAssemblyAttributes"
           Condition=" '$(_SatelliteCulture)' != '' "
           Inputs="$(MSBuildAllProjects);@(_OneCultureResource)"
           Outputs="$(ICU4NSatelliteAssemblyOutputDir)/$(_SatelliteCulture)/$(ICU4NMainAssemblyName).resources.dll">
@@ -234,6 +263,7 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <_OneCultureAttribute Include="@(_SatelliteCommonAttribute)" />
       <_OneCultureAttribute Include="System.Reflection.AssemblyVersionAttribute">
         <_Parameter1>$(_SatelliteAssemblyVersion)</_Parameter1>
       </_OneCultureAttribute>
@@ -244,7 +274,7 @@
 
     <MakeDir Directories="$(ICU4NSatelliteAssemblyOutputDir)/$(_SatelliteCulture)" />
 
-    <Message Text="Generating satellite assembly for culture '$(_SatelliteCulture)'..." Importance="high" />
+    <Message Text="Generating satellite assembly for $(_SatelliteCulture)..." Importance="high" />
 
     <WriteCodeFragment AssemblyAttributes="@(_OneCultureAttribute)"
                        Language="C#"
@@ -257,7 +287,10 @@
          KeyFile="$(AssemblyOriginatorKeyFile)"
          NoConfig="true"
          NoLogo="true"
+         NoStandardLib="true"
          Deterministic="true"
+         Optimize="true"
+         DebugType="none"
          TargetType="Library"
          UseSharedCompilation="true" />
   </Target>
