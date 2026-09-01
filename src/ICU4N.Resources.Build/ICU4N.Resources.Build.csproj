@@ -210,16 +210,10 @@
       </_SatelliteRecursionInput>
     </ItemGroup>
 
-    <!-- Announce up front so a long run does not look like a hang. -->
-    <Message Text="Generating @(_SatelliteRecursionInput->Count()) ICU4N satellite assemblies (up-to-date ones are skipped)..."
-             Importance="high" />
-
     <MSBuild Projects="@(_SatelliteRecursionInput->'%(ProjectPath)')"
              Targets="_BuildOneSatelliteAssembly"
              Properties="_SatelliteCulture=%(_SatelliteRecursionInput.Identity);TargetFramework=$(TargetFramework);_SatelliteAssemblyVersion=$(AssemblyVersion);_SatelliteFileVersion=$(FileVersion);_SatelliteInformationalVersion=$(AssemblyInformationalVersion)"
              BuildInParallel="true" />
-
-    <Message Text="ICU4N satellite assemblies are up to date." Importance="high" />
   </Target>
 
   <Target Name="_BuildNeutralSatelliteAssembly"
@@ -236,8 +230,6 @@
         <_Parameter1>$(AssemblyVersion)</_Parameter1>
       </_NeutralSatelliteAttribute>
     </ItemGroup>
-
-    <Message Text="Generating satellite assembly for neutral culture..." Importance="high" />
 
     <WriteCodeFragment AssemblyAttributes="@(_NeutralSatelliteAttribute)"
                        Language="C#"
@@ -256,6 +248,11 @@
          DebugType="none"
          TargetType="Library"
          UseSharedCompilation="true" />
+
+    <!-- Same shape the SDK uses for assemblies; the terminal logger renders it
+         as the per-project "-> path" line. -->
+    <Message Importance="high"
+             Text="$(ICU4NMainAssemblyName).resources (neutral) -&gt; $([System.IO.Path]::GetFullPath('$(ICU4NSatelliteAssemblyOutputDir)/$(ICU4NMainAssemblyName).resources.dll'))" />
   </Target>
 
   <Target Name="_BuildOneSatelliteAssembly"
@@ -284,8 +281,6 @@
 
     <MakeDir Directories="$(ICU4NSatelliteAssemblyOutputDir)/$(_SatelliteCulture)" />
 
-    <Message Text="Generating satellite assembly for $(_SatelliteCulture)..." Importance="high" />
-
     <WriteCodeFragment AssemblyAttributes="@(_OneCultureAttribute)"
                        Language="C#"
                        OutputFile="$(_AssemblyInfoFile)" />
@@ -303,6 +298,9 @@
          DebugType="none"
          TargetType="Library"
          UseSharedCompilation="true" />
+
+    <Message Importance="high"
+             Text="$(ICU4NMainAssemblyName).resources ($(_SatelliteCulture)) -&gt; $([System.IO.Path]::GetFullPath('$(_OutputAssembly)'))" />
   </Target>
 
   <UsingTask TaskName="DownloadFileWithFallback" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildBinPath)\Microsoft.Build.Tasks.Core.dll">
